@@ -406,7 +406,7 @@ public final class ReedSolomonTestCase extends Assert {
       }
     }
   }
-  
+
   private static void testEncodeDecodeRandom(GenericGF field, int dataSize, int ecSize) {
     assertTrue("Invalid data size for " + field, dataSize > 0 && dataSize <= field.getSize() - 3);
     assertTrue("Invalid ECC size for " + field, ecSize > 0 && ecSize + dataSize <= field.getSize());
@@ -429,12 +429,12 @@ public final class ReedSolomonTestCase extends Assert {
       testDecoder(field, dataWords, ecWords);
     }
   }
-  
+
   private static void testEncodeDecode(GenericGF field, int[] dataWords, int[] ecWords) {
     testEncoder(field, dataWords, ecWords);
     testDecoder(field, dataWords, ecWords);
   }
-  
+
   private static void testEncoder(GenericGF field, int[] dataWords, int[] ecWords) {
     ReedSolomonEncoder encoder = new ReedSolomonEncoder(field);
     int[] messageExpected = new int[dataWords.length + ecWords.length];
@@ -443,7 +443,7 @@ public final class ReedSolomonTestCase extends Assert {
     System.arraycopy(ecWords, 0, messageExpected, dataWords.length, ecWords.length);
     System.arraycopy(dataWords, 0, message, 0, dataWords.length);
     encoder.encode(message, ecWords.length);
-    assertDataEquals("Encode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed", 
+    assertDataEquals("Encode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed",
                      messageExpected, message);
   }
 
@@ -456,7 +456,7 @@ public final class ReedSolomonTestCase extends Assert {
     for (int j = 0; j < iterations; j++) {
       for (int i = 0; i < ecWords.length; i++) {
         if (i > 10 && i < ecWords.length / 2 - 10) {
-          // performance improvement - skip intermediate cases in long-running tests 
+          // performance improvement - skip intermediate cases in long-running tests
           i += ecWords.length / 10;
         }
         System.arraycopy(dataWords, 0, message, 0, dataWords.length);
@@ -466,16 +466,16 @@ public final class ReedSolomonTestCase extends Assert {
           decoder.decode(message, ecWords.length);
         } catch (ReedSolomonException e) {
           // fail only if maxErrors exceeded
-          assertTrue("Decode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed at " + 
+          assertTrue("Decode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed at " +
                          i + " errors: " + e,
                      i > maxErrors);
           // else stop
           break;
         }
         if (i < maxErrors) {
-          assertDataEquals("Decode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed at " + 
+          assertDataEquals("Decode in " + field + " (" + dataWords.length + ',' + ecWords.length + ") failed at " +
                            i + " errors",
-                           dataWords, 
+                           dataWords,
                            message);
         }
       }
@@ -485,12 +485,12 @@ public final class ReedSolomonTestCase extends Assert {
   private static void assertDataEquals(String message, int[] expected, int[] received) {
     for (int i = 0; i < expected.length; i++) {
       if (expected[i] != received[i]) {
-        fail(message + ". Mismatch at " + i + ". Expected " + arrayToString(expected) + ", got " + 
+        fail(message + ". Mismatch at " + i + ". Expected " + arrayToString(expected) + ", got " +
              arrayToString(Arrays.copyOf(received, expected.length)));
       }
     }
   }
-  
+
   private static String arrayToString(int[] data) {
     StringBuilder sb = new StringBuilder("{");
     for (int i = 0; i < data.length; i++) {
@@ -501,6 +501,83 @@ public final class ReedSolomonTestCase extends Assert {
 
   private static Random getPseudoRandom() {
     return new Random(0xDEADBEEF);
+  }
+
+
+  /**
+   * Compute all combinations of errors for n errors with n locations
+   * @param currentNumberOfErrors Cursor for current number of errors [0-tryTable.length[
+   * @param tryTable Give the locations of errors, it must be the size of maximum number of errors
+   * @param locations Maximum index of symbol
+   * @return New value of currentNumberOfErrors
+   */
+  public static int nextErrorState(int currentNumberOfErrors, int[] tryTable, int locations) {
+    if (tryTable[currentNumberOfErrors] == locations - 1) {
+      // All possibilities have been done for the last entry
+      int incrementCursor = currentNumberOfErrors - 1;
+      while (incrementCursor >= 0) {
+        if (tryTable[incrementCursor] < tryTable[incrementCursor + 1] - 1) {
+          tryTable[incrementCursor]++;
+          tryTable[incrementCursor + 1] = tryTable[incrementCursor] + 1;
+          break;
+        }
+        incrementCursor--;
+      }
+      if (incrementCursor < 0) {
+        currentNumberOfErrors++;
+        tryTable[0] = 0;
+        for (int c = 1; c < tryTable.length; c++) {
+          tryTable[c] = tryTable[c - 1] + 1;
+        }
+      }
+    } else {
+      tryTable[currentNumberOfErrors] += 1;
+    }
+    return currentNumberOfErrors;
+  }
+
+  public void testRS16(int blockSize, int eccBytes) throws ReedSolomonException {      int payloadSize = blockSize - eccBytes;
+    GenericGF gallois = GenericGF.AZTEC_PARAM;
+
+    Random random = getPseudoRandom();
+    int[] payload = new int[payloadSize];
+    for(int i=0; i<payloadSize; i++) {
+      payload[i]=random.nextInt(gallois.getSize());
+    }
+    ReedSolomonEncoder encoder = new ReedSolomonEncoder(gallois);
+    int[] blocks = new int[payload.length + eccBytes];
+    System.arraycopy(payload, 0, blocks, 0, payload.length);
+    encoder.encode(blocks, eccBytes);
+    // Test decode
+    ReedSolomonDecoder decoder = new ReedSolomonDecoder(gallois);
+
+    int tryCursor = 0;
+    final int maxNumberOfErrors = Math.max(1, eccBytes / 2);
+    int[] tryTable = new int[maxNumberOfErrors];
+    // Corrupt all possible data locations
+    while (tryCursor < tryTable.length) {
+      int[] decoded = Arrays.copyOf(blocks, blocks.length);
+      // Insert errors
+      for (int c = 0; c < tryCursor + 1; c++) {
+        do {
+          decoded[tryTable[c]] = random.nextInt(gallois.getSize());
+        } while (decoded[tryTable[c]] == blocks[tryTable[c]]);
+      }
+      decoder.decode(decoded, eccBytes);
+      assertArrayEquals(blocks, decoded);
+      tryCursor = nextErrorState(tryCursor, tryTable, blocks.length);
+    }
+
+    System.out.println(String.format("For %d symbols payload can correct up to %d errors with message of %d symbols." +
+      " It's %.2f %% correction", payload.length, maxNumberOfErrors, blocks.length, ((double)maxNumberOfErrors / payload.length) * 100.0) );
+  }
+
+  @Test
+  public void testGF16() throws ReedSolomonException {
+    testRS16(14, 2);
+    testRS16(8, 2);
+    testRS16(12, 4);
+    testRS16(10, 4);
   }
 
 }
